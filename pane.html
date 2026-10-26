@@ -30,11 +30,19 @@ table.fee{width:100%;border-collapse:collapse;margin-top:6px}table.fee td,table.
   // Email HTML in the same style as Outlook writes it (matches the signature): Verdana 11pt grey, one line per div,
   // an empty line as <div><br></div>, and lines starting "- " or "• " as a real bulleted list.
   var MAIL_STYLE = 'font-family:Verdana,Geneva,sans-serif;font-size:11pt;color:rgb(102,102,102)';
+  // Templates write links as [words](url): emails show the words as a link; WhatsApp, Copy and logs get 'words (url)'.
+  var MD_LINK = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  // Message box tidy: '- ' lines become proper '\u2022 ' bullets (indented '  - ' lines become '\u25e6' sub-points), with a blank line before each list.
+  var BUL_RE = /^(\s*)[-\u2022\u25e6]\s+(.*)$/;
+  function tidyBullets(text) { var out = []; String(text || '').split('\n').forEach(function (l) { var m = l.match(BUL_RE); if (m) { var prev = out.length ? out[out.length - 1] : ''; if (prev.trim() && !BUL_RE.test(prev)) out.push(''); out.push(m[1].length >= 2 ? '    \u25e6 ' + m[2] : '\u2022 ' + m[2]); } else out.push(l); }); return out.join('\n'); }
+  function linkPlain(text) { return String(text || '').replace(MD_LINK, '$1 ($2)'); }
   function mailHtml(text) {
     var e = function (x) { return String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
     var out = [], list = [], lines = String(text || '').replace(/\r/g, '').split('\n');
-    var flush = function () { if (list.length) { out.push('<ul style="margin-top:0;margin-bottom:0;' + MAIL_STYLE + '">' + list.map(function (l) { return '<li style="' + MAIL_STYLE + '">' + e(l) + '</li>'; }).join('') + '</ul>'); list = []; } };
-    lines.forEach(function (l) { var m = l.match(/^\s*(?:-|•)\s+(.*)$/); if (m) { list.push(m[1]); return; } flush(); out.push('<div style="' + MAIL_STYLE + '">' + (l.trim() ? e(l) : '<br>') + '</div>'); });
+    var UL = '<ul style="margin-top:0;margin-bottom:0;' + MAIL_STYLE + '">', LI = '<li style="' + MAIL_STYLE + '">';
+    var flush = function () { if (!list.length) return; var h = UL, sub = false; list.forEach(function (it, i) { if (it.l === 0 || i === 0) { if (sub) { h += '</ul>'; sub = false; } if (i > 0) h += '</li>'; h += LI + lk(it.t); } else { if (!sub) { h += UL; sub = true; } h += LI + lk(it.t) + '</li>'; } }); if (sub) h += '</ul>'; out.push(h + '</li></ul>'); list = []; };
+    var lk = function (x) { return e(x).replace(MD_LINK, '<a href="$2" style="color:rgb(5,99,193);text-decoration:underline">$1</a>'); };
+    lines.forEach(function (l) { var m = l.match(BUL_RE); if (m) { list.push({ l: m[1].length >= 2 ? 1 : 0, t: m[2] }); return; } flush(); out.push('<div style="' + MAIL_STYLE + '">' + (l.trim() ? lk(l) : '<br>') + '</div>'); });
     flush();
     return out.join('');
   }
@@ -54,7 +62,7 @@ table.fee{width:100%;border-collapse:collapse;margin-top:6px}table.fee td,table.
         if (!o) return hi + '\n\n' + (OPP.busy ? (v.lang === 'id' ? 'Sedang menulis pesan…' : 'Writing the message…') : (v.lang === 'id' ? 'Pilih posisinya di atas, lalu pesan akan ditulis otomatis.' : 'Choose the job above and the message is written for you.'));
         return hi + '\n\n' + String(o.message || '').split('[CONSULTANT]').join(v.me).replace(/([^\n])\n+(\u2022 )/, '$1\n\n$2'); } },
     { id: 'sim', g: 'Meetings', e: 'contact', n: 'Schedule an online meeting (booking link)', ch: 'email', vars: ['sal', 'name', 'book'], subj: function () { return 'Select Headhunter: Schedule an online discussion'; },
-      body: function (v) { return 'Hello ' + v.sal + ' ' + v.name + ',\n\nIn order to make scheduling a time for us to have an online discussion easier, I would like to invite you to book a time which is convenient for you.\n\nPlease use this link to select a time that fits your schedule: ' + (v.book || '[your booking link]') + '\n'; } },
+      body: function (v) { return 'Hello ' + v.sal + ' ' + v.name + ',\n\nIn order to make scheduling a time for us to have an online discussion easier, I would like to invite you to book a time which is convenient for you.\n\n' + (v.book ? 'Please use [this link](' + v.book + ') to select a time that fits your schedule.' : 'Please use this link to select a time that fits your schedule: [your booking link]') + '\n'; } },
     { id: 'olc', g: 'Meetings', e: 'contact', n: 'Teams meeting invite (Outlook)', ch: 'invite', vars: ['name', 'when', 'mins'], subj: function (v) { return 'Online Meeting: ' + v.me + ' (Select Headhunter) x ' + v.full + (v.company ? ' (' + v.company + ')' : ''); },
       body: function (v) { return 'Name: ' + v.full + ' | HP: ' + (v.phone || '+62') + ' | E: ' + (v.email || '') + '\n\nI am pleased to arrange a discussion with you regarding your company\'s hiring plans and how I might be able to support you in finding talent for your organization. Please join the call using the Teams link in this invitation.'; } },
     { id: 'rem', g: 'Meetings', e: 'both', n: 'Meeting reminder (WhatsApp)', ch: 'wa', vars: ['sal', 'name', 'time'], body: function (v) { return 'Hello ' + v.sal + ' ' + v.name + '. I look forward to our online meeting today @ ' + (v.time || '[time]') + '. Please let me know if you have any trouble connecting through the link I sent you.'; } },
@@ -133,10 +141,10 @@ table.fee{width:100%;border-collapse:collapse;margin-top:6px}table.fee td,table.
     $('#rp').onclick = function () { reply(false); }; $('#ra').onclick = function () { reply(true); }; $('#cp').onclick = copy;
     fill();
   }
-  function fill() { $('#body').value = CUR.body(vars()); }
+  function fill() { $('#body').value = tidyBullets(CUR.body(vars())); }
   function msg(t, c) { var s = $('#st'); s.className = 'st' + (c ? ' ' + c : ''); s.textContent = t; }
   function html(text) { return mailHtml(text) + '<div style="' + MAIL_STYLE + '"><br></div>'; } // blank line before Outlook adds the signature
-  function copy() { var b = $('#body').value; try { navigator.clipboard.writeText(b).then(function () { msg('Copied.', 'ok'); }, function () { msg('Select the text and press Ctrl+C.', 'err'); }); } catch (e) { msg('Select the text and press Ctrl+C.', 'err'); } }
+  function copy() { var b = linkPlain($('#body').value); try { navigator.clipboard.writeText(b).then(function () { msg('Copied.', 'ok'); }, function () { msg('Select the text and press Ctrl+C.', 'err'); }); } catch (e) { msg('Select the text and press Ctrl+C.', 'err'); } }
   function reply(all) {
     if (!ITEM) { msg('Open an email first.', 'err'); return; }
     var body = $('#body').value, h = html(body);
@@ -144,7 +152,7 @@ table.fee{width:100%;border-collapse:collapse;margin-top:6px}table.fee td,table.
     if (!$('#log').checked) { msg('Reply opened. Check it and press Send.', 'ok'); return; }
     msg('Reply opened. Logging it on Vincere…');
     // ONE n8n run: find the sender in Vincere and log the reply on their record
-    fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k: K, action: 'log_by_email', type: 'contact', prefer: CUR.e === 'candidate' ? 'candidate' : 'contact', email: FROM.email, subject: 'RE: ' + (ITEM.subject || ''), body: body, channel: 'Email' }) })
+    fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k: K, action: 'log_by_email', type: 'contact', prefer: CUR.e === 'candidate' ? 'candidate' : 'contact', email: FROM.email, subject: 'RE: ' + (ITEM.subject || ''), body: linkPlain(body), channel: 'Email' }) })
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok && j.logged) msg('Reply opened, and logged on ' + j.found.name + '’s Vincere record (' + (j.found.type === 'contact' ? 'client contact' : 'candidate') + ').', 'ok');
         else if (j && j.ok && j.found === false) msg('Reply opened. ' + FROM.email + ' is not in Vincere, so nothing was logged.', 'err');
