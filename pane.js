@@ -120,6 +120,7 @@
   var LIST = TPLS.filter(function (t) { return (t.ch === 'email' || t.ch === 'both') && t.id !== 'opp'; }); // the job-opportunity message needs the call window
   function drawList() {
     $('#ed').hidden = true; var L = $('#list'); L.hidden = false; L.innerHTML = '';
+    myGroup(L);
     var aud = [['contact', 'For clients'], ['candidate', 'For candidates']];
     aud.forEach(function (a) {
       var ts = LIST.filter(function (t) { return t.e === a[0] || t.e === 'both'; }); if (!ts.length) return;
@@ -161,7 +162,58 @@
       i.addEventListener('change', function () { i.dispatchEvent(new Event('input')); });
     });
     $('#rp').onclick = function () { reply(false); }; $('#ra').onclick = function () { reply(true); }; $('#cp').onclick = copy;
+    if (t.mine) myBtns(t.mine);
     fill();
+  }
+  // ---------- My templates (Nov 2026): the same personal templates as the Vincere window, found by your mailbox address ----------
+  var MYT_URL = 'https://selectheadhunter.app.n8n.cloud/webhook/mytpl', MY = { list: null, uid: '', name: '', err: '' };
+  var MY_PH = [['{salutation}', 'Salutation'], ['{first name}', 'First name'], ['{full name}', 'Full name'], ['{company}', 'Company'], ['{my name}', 'My name']];
+  function myFill(s, v) { return String(s || '').replace(/\{(salutation|first name|full name|company|my name)\}/gi, function (m, k) { k = k.toLowerCase(); return k === 'salutation' ? (v.sal || '') : k === 'first name' ? (v.name || '') : k === 'full name' ? (v.full || '') : k === 'company' ? (v.company || '') : (v.me || ''); }).replace(/([^\s]) {2,}/g, '$1 ').replace(/ +,/g, ','); }
+  function myTpl(m) { return { id: 'my_' + m.id, g: 'My templates', e: m.e || 'both', n: m.name, ch: 'email', vars: ['sal', 'name'], mine: m, body: function (v) { return myFill(m.body, v); } }; }
+  function myapi(action, body) { body = Object.assign({ k: K, action: action, user_id: MY.uid }, body || {}); return fetch(MYT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { return r.text(); }).then(function (t) { var j = null; try { j = JSON.parse(t); } catch (e) {} if (!j) throw new Error('Server error: ' + t.slice(0, 120)); if (j.ok === false) throw new Error(j.error || 'That did not work. Try again.'); return j; }); }
+  function myWho() { // the Vincere user for this mailbox, remembered on this computer
+    var em = ''; try { em = String(Office.context.mailbox.userProfile.emailAddress || '').toLowerCase(); } catch (e) {}
+    var c = LS.get('me.' + em); if (c && c.id) { MY.uid = String(c.id); MY.name = c.name || ''; return Promise.resolve(); }
+    if (!em) return Promise.reject(new Error('Outlook did not give your email address.'));
+    return fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k: K, action: 'whoami', email: em }) }).then(function (r) { return r.json(); })
+      .then(function (j) { if (!j || !j.ok || !j.id) throw new Error((j && j.error) || 'your Vincere user was not found'); MY.uid = String(j.id); MY.name = j.name || ''; LS.set('me.' + em, { id: j.id, name: j.name }); });
+  }
+  function myLoad() { MY.err = ''; return myWho().then(function () { return myapi('mytpl_list'); }).then(function (x) { MY.list = x.templates || []; }).catch(function (e) { MY.list = []; MY.err = e.message; }); }
+  function myNote(d, t) { var n = document.createElement('div'); n.className = 'note'; n.textContent = t; d.appendChild(n); }
+  function myGroup(L) {
+    var h = document.createElement('div'); h.className = 'grp'; h.textContent = 'My templates'; L.appendChild(h);
+    var d = document.createElement('div'); d.className = 'tl'; L.appendChild(d);
+    if (MY.list === null) { myNote(d, 'Loading your templates…'); myLoad().then(function () { if (!$('#list').hidden) drawList(); }); return; }
+    MY.list.forEach(function (m) { var b = document.createElement('button'); b.type = 'button'; b.textContent = m.name; b.onclick = function () { open(myTpl(m)); }; d.appendChild(b); });
+    if (MY.uid) { var nb = document.createElement('button'); nb.type = 'button'; nb.textContent = '+ New template'; nb.onclick = function () { myEdit(null); }; d.appendChild(nb); }
+    if (MY.err) myNote(d, 'Your templates could not be loaded: ' + MY.err + '.'); else if (!MY.list.length) myNote(d, 'Only you see your templates. The same ones show in the Select Snippets window in Vincere.');
+  }
+  function myBtns(m) {
+    var B = $('#ed .btns'); if (!B) return;
+    var eb = document.createElement('button'); eb.type = 'button'; eb.className = 'btn q'; eb.textContent = 'Edit template'; eb.onclick = function () { myEdit(m); }; B.appendChild(eb);
+    var db = document.createElement('button'); db.type = 'button'; db.className = 'btn q'; db.textContent = 'Delete template'; db.onclick = function () { if (!db.dataset.sure) { db.dataset.sure = '1'; db.textContent = 'Press again to delete'; return; } db.disabled = true;
+      myapi('mytpl_delete', { id: m.id }).then(function (x) { MY.list = x.templates || []; CUR = null; drawList(); }).catch(function (e) { db.disabled = false; msg(e.message, 'err'); }); }; B.appendChild(db);
+  }
+  function myEdit(m) {
+    CUR = null; m = m || { name: '', e: 'both', ch: 'email', subj: '', body: '' }; $('#list').hidden = true; var ed = $('#ed'); ed.hidden = false;
+    ed.innerHTML = '<button class="back" type="button" id="back">← All templates</button><div style="font-weight:700;font-size:14px">' + (m.id ? 'Edit my template' : 'New template') + '</div><div class="note">Only you see it. It is saved under your Vincere user' + (MY.name ? ' (' + esc(MY.name) + ')' : '') + ' and also shows in the Select Snippets window in Vincere.</div>' +
+      '<label>Template name</label><input id="myN" maxlength="80" placeholder="e.g. Follow-up after no reply">' +
+      '<div class="two"><div><label>Use it for</label><select id="myE"><option value="candidate">Candidates</option><option value="contact">Client contacts</option><option value="both">Both</option></select></div><div><label>Usually sent by</label><select id="myC"><option value="email">Email</option><option value="wa">WhatsApp</option></select></div></div>' +
+      '<label>Subject (for emails sent from Vincere; replies keep the email’s subject)</label><input id="myS" maxlength="200">' +
+      '<label>Message</label><textarea id="myB" maxlength="6000"></textarea><div class="btns" style="margin-top:6px;gap:6px">' + MY_PH.map(function (p) { return '<button type="button" class="btn q" style="padding:4px 10px;font-weight:600" data-ph="' + p[0] + '">' + p[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="note">These fill in when you use the template (Company only in the Vincere window). Lines starting with "- " become bullet points.</div>' +
+      '<div class="btns"><button class="btn" type="button" id="mySave">Save template</button><button class="btn q" type="button" id="myCancel">Cancel</button></div><div class="st" id="st"></div>';
+    $('#myN').value = m.name; $('#myE').value = m.e || 'both'; $('#myC').value = m.ch || 'email'; $('#myS').value = m.subj || ''; $('#myB').value = m.id ? (m.body || '') : 'Hello {salutation} {first name},\n\n\n\nBest regards,\n{my name}';
+    var last = $('#myB'); ['#myS', '#myB'].forEach(function (s) { $(s).addEventListener('focus', function () { last = $(s); }); });
+    [].forEach.call(ed.querySelectorAll('[data-ph]'), function (b) { b.onclick = function () { var f = last, a = f.selectionStart || 0, z = f.selectionEnd || 0; f.value = f.value.slice(0, a) + b.dataset.ph + f.value.slice(z); f.focus(); f.selectionStart = f.selectionEnd = a + b.dataset.ph.length; }; });
+    $('#back').onclick = drawList; $('#myCancel').onclick = drawList;
+    $('#mySave').onclick = function () {
+      var rec = { id: m.id || '', name: $('#myN').value.trim(), e: $('#myE').value, ch: $('#myC').value, subj: $('#myS').value.trim(), body: $('#myB').value.replace(/\s+$/, '') };
+      if (!rec.name || !rec.body.trim()) { msg('Give the template a name and a message.', 'err'); return; }
+      $('#mySave').disabled = true; msg('Saving…');
+      myapi('mytpl_save', { template: rec }).then(function (x) { MY.list = x.templates || []; var s = MY.list.filter(function (t) { return t.id === x.id; })[0]; if (s) { open(myTpl(s)); msg('Saved. This is how it reads for ' + (FROM.name || 'this person') + '.', 'ok'); } else drawList(); })
+        .catch(function (e) { $('#mySave').disabled = false; msg(e.message, 'err'); });
+    };
   }
   function fill() { $('#body').value = tidyBullets(CUR.body(vars())); }
   function msg(t, c) { var s = $('#st'); s.className = 'st' + (c ? ' ' + c : ''); s.textContent = t; }
