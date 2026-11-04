@@ -167,15 +167,37 @@
   }
   // ---------- My templates (Nov 2026): the same personal templates as the Vincere window, found by your mailbox address ----------
   var MYT_URL = 'https://selectheadhunter.app.n8n.cloud/webhook/mytpl', MY = { list: null, uid: '', name: '', err: '' };
+  // Sign-in (Nov 2026): the add-in works only for a consultant signed in to Vincere as themselves (two weeks). Outlook cannot receive the
+  // sign-in directly, so the pane makes a one-time code, opens the Vincere sign-in with it, and collects the session once it is done.
+  var SIGNIN = 'https://selectheadhunter.app.n8n.cloud/webhook/vincere-signin', CLAIM = 'https://selectheadhunter.app.n8n.cloud/webhook/vincere/claim';
+  function SESS() { var x = LS.get('session'); if (!(x && /^s2\./.test(String(x.s || '')) && Number(x.exp) > Date.now() + 60e3)) { try { var r = Office.context.roamingSettings.get('shsess'); if (r && /^s2\./.test(String(r.s || '')) && Number(r.exp) > Date.now() + 60e3) { x = r; LS.set('session', r); } else x = null; } catch (e) { x = null; } } return x; }
+  function sessTok() { var x = SESS(); return x ? x.s : ''; }
+  function sessClear() { LS.set('session', null); try { Office.context.roamingSettings.remove('shsess'); Office.context.roamingSettings.saveAsync(); } catch (e) {} }
+  function askSignIn(cb) {
+    var b = $('#keyBox'); b.hidden = false; $('#list').hidden = true; $('#ed').hidden = true;
+    b.innerHTML = '<label>Sign in to Vincere</label><div class="note">Select Snippets works only for consultants signed in to Vincere as themselves. Your sign-in lasts two weeks.</div><div class="btns"><button class="btn" type="button" id="signGo">Sign in to Vincere</button></div><div class="st" id="signSt"></div>';
+    $('#signGo').onclick = function () {
+      var a = new Uint8Array(16); (window.crypto || window.msCrypto).getRandomValues(a); var pair = Array.prototype.map.call(a, function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+      var url = SIGNIN + '?o=' + encodeURIComponent('pair.' + pair), st = $('#signSt');
+      try { Office.context.ui.openBrowserWindow(url); } catch (e) { window.open(url, '_blank'); }
+      st.className = 'st'; st.textContent = 'Finish signing in in your browser. This pane carries on by itself. If you had to log in to Access Evo first, close that tab and click Sign in to Vincere again.';
+      var n = 0; (function poll() { if (n++ > 100) { st.className = 'st err'; st.textContent = 'The sign-in did not finish. Click Sign in to Vincere again.'; return; }
+        fetch(CLAIM, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pair: pair }) }).then(function (r) { return r.json(); }).then(function (j) {
+          if (j && j.ready && j.s) { var x = { s: j.s, uid: j.uid, name: j.name || '', exp: Number(j.exp) || 0 }; LS.set('session', x); try { Office.context.roamingSettings.set('shsess', x); Office.context.roamingSettings.saveAsync(); } catch (e) {} b.hidden = true; $('#list').hidden = false; cb(); }
+          else setTimeout(poll, 2500);
+        }).catch(function () { setTimeout(poll, 4000); }); })();
+    };
+  }
   var MY_PH = [['{salutation}', 'Salutation'], ['{first name}', 'First name'], ['{full name}', 'Full name'], ['{company}', 'Company'], ['{my name}', 'My name']];
   function myFill(s, v) { return String(s || '').replace(/\{(salutation|first name|full name|company|my name)\}/gi, function (m, k) { k = k.toLowerCase(); return k === 'salutation' ? (v.sal || '') : k === 'first name' ? (v.name || '') : k === 'full name' ? (v.full || '') : k === 'company' ? (v.company || '') : (v.me || ''); }).replace(/([^\s]) {2,}/g, '$1 ').replace(/ +,/g, ','); }
   function myTpl(m) { return { id: 'my_' + m.id, g: 'My templates', e: m.e || 'both', n: m.name, ch: 'email', vars: ['sal', 'name'], mine: m, body: function (v) { return myFill(m.body, v); } }; }
-  function myapi(action, body) { body = Object.assign({ k: K, action: action, user_id: MY.uid }, body || {}); return fetch(MYT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { return r.text(); }).then(function (t) { var j = null; try { j = JSON.parse(t); } catch (e) {} if (!j) throw new Error('Server error: ' + t.slice(0, 120)); if (j.ok === false) throw new Error(j.error || 'That did not work. Try again.'); return j; }); }
+  function myapi(action, body) { body = Object.assign({ sess: sessTok(), action: action, user_id: MY.uid }, body || {}); return fetch(MYT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { return r.text(); }).then(function (t) { var j = null; try { j = JSON.parse(t); } catch (e) {} if (!j) throw new Error('Server error: ' + t.slice(0, 120)); if (j.ok === false) { if (j.signin_required) { sessClear(); askSignIn(load); } throw new Error(j.error || 'That did not work. Try again.'); } return j; }); }
   function myWho() { // the Vincere user for this mailbox, remembered on this computer
     var em = ''; try { em = String(Office.context.mailbox.userProfile.emailAddress || '').toLowerCase(); } catch (e) {}
+    var sx = SESS(); if (sx && sx.uid) { MY.uid = String(sx.uid); MY.name = sx.name || ''; return Promise.resolve(); } // signed in: that is who you are
     var c = LS.get('me.' + em); if (c && c.id) { MY.uid = String(c.id); MY.name = c.name || ''; return Promise.resolve(); }
     if (!em) return Promise.reject(new Error('Outlook did not give your email address.'));
-    return fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k: K, action: 'whoami', email: em }) }).then(function (r) { return r.json(); })
+    return fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sess: sessTok(), action: 'whoami', email: em }) }).then(function (r) { return r.json(); })
       .then(function (j) { if (!j || !j.ok || !j.id) throw new Error((j && j.error) || 'your Vincere user was not found'); MY.uid = String(j.id); MY.name = j.name || ''; LS.set('me.' + em, { id: j.id, name: j.name }); });
   }
   function myLoad() { MY.err = ''; return myWho().then(function () { return myapi('mytpl_list'); }).then(function (x) { MY.list = x.templates || []; }).catch(function (e) { MY.list = []; MY.err = e.message; }); }
@@ -226,12 +248,12 @@
     if (!$('#log').checked) { msg('Reply opened. Check it and press Send.', 'ok'); return; }
     msg('Reply opened. Logging it on Vincere…');
     // ONE n8n run: find the sender in Vincere and log the reply on their record
-    fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k: K, action: 'log_by_email', type: 'contact', prefer: CUR.e === 'candidate' ? 'candidate' : 'contact', email: FROM.email, subject: 'RE: ' + (ITEM.subject || ''), body: linkPlain(body), channel: 'Email' }) })
+    fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sess: sessTok(), action: 'log_by_email', type: 'contact', prefer: CUR.e === 'candidate' ? 'candidate' : 'contact', email: FROM.email, subject: 'RE: ' + (ITEM.subject || ''), body: linkPlain(body), channel: 'Email' }) })
       .then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok && j.logged) msg('Reply opened, and logged on ' + j.found.name + '’s Vincere record (' + (j.found.type === 'contact' ? 'client contact' : 'candidate') + ').', 'ok');
         else if (j && j.ok && j.found === false) msg('Reply opened. ' + FROM.email + ' is not in Vincere, so nothing was logged.', 'err');
-        else { msg('Reply opened, but it was not logged: ' + ((j && j.error) || 'unknown error'), 'err'); if (j && /key/i.test(j.error || '')) { K = ''; LS.set('key', ''); try { Office.context.roamingSettings.remove('shkey'); Office.context.roamingSettings.saveAsync(); } catch (e) {} } }
-      }).catch(function (e) { msg('Reply opened, but it was not logged (' + e.message + ').', 'err'); });
+        else { msg('Reply opened, but it was not logged: ' + ((j && j.error) || 'unknown error'), 'err'); if (j && /sign/i.test(j.error || '')) { sessClear(); askSignIn(load); } }
+      }).catch(function (e) { msg('Reply opened, but it was not logged (' + e.message + '). If you were signed out, sign in again and log it by hand.', 'err'); });
   }
   function getKey() { try { K = Office.context.roamingSettings.get('shkey') || ''; } catch (e) {} if (!K) K = LS.get('key') || ''; return K; }
   function askKey(cb) {
@@ -245,7 +267,7 @@
     if (CUR) open(CUR); else drawList();
   }
   Office.onReady(function () {
-    if (!getKey()) askKey(load); else load();
+    if (!SESS()) askSignIn(load); else load(); // stage 3: sign in instead of the team key
     try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () { CUR = null; load(); }); } catch (e) {}
   });
 })();
