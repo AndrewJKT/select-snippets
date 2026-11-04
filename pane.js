@@ -1,5 +1,5 @@
 (function () {
-  var K = '', API = 'https://selectheadhunter.app.n8n.cloud/webhook/import/run';
+  var K = '', API = 'https://n8n-4d6u.srv2126654.hstgr.cloud/webhook/import/run';
   var $ = function (s) { return document.querySelector(s); };
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   var LS = { get: function (k) { try { return JSON.parse(localStorage.getItem('shs.' + k)); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem('shs.' + k, JSON.stringify(v)); } catch (e) {} } };
@@ -166,10 +166,10 @@
     fill();
   }
   // ---------- My templates (Nov 2026): the same personal templates as the Vincere window, found by your mailbox address ----------
-  var MYT_URL = 'https://selectheadhunter.app.n8n.cloud/webhook/mytpl', MY = { list: null, uid: '', name: '', err: '' };
+  var MYT_URL = 'https://n8n-4d6u.srv2126654.hstgr.cloud/webhook/mytpl', MY = { list: null, uid: '', name: '', err: '' };
   // Sign-in (Nov 2026): the add-in works only for a consultant signed in to Vincere as themselves (two weeks). Outlook cannot receive the
   // sign-in directly, so the pane makes a one-time code, opens the Vincere sign-in with it, and collects the session once it is done.
-  var SIGNIN = 'https://selectheadhunter.app.n8n.cloud/webhook/vincere-signin', CLAIM = 'https://selectheadhunter.app.n8n.cloud/webhook/vincere/claim';
+  var SIGNIN = 'https://n8n-4d6u.srv2126654.hstgr.cloud/webhook/vincere-signin', CLAIM = 'https://n8n-4d6u.srv2126654.hstgr.cloud/webhook/vincere/claim';
   function SESS() { var x = LS.get('session'); if (!(x && /^s2\./.test(String(x.s || '')) && Number(x.exp) > Date.now() + 60e3)) { try { var r = Office.context.roamingSettings.get('shsess'); if (r && /^s2\./.test(String(r.s || '')) && Number(r.exp) > Date.now() + 60e3) { x = r; LS.set('session', r); } else x = null; } catch (e) { x = null; } } return x; }
   function sessTok() { var x = SESS(); return x ? x.s : ''; }
   function sessClear() { LS.set('session', null); try { Office.context.roamingSettings.remove('shsess'); Office.context.roamingSettings.saveAsync(); } catch (e) {} }
