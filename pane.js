@@ -12,15 +12,22 @@
   // Message box tidy: '- ' lines become proper '\u2022 ' bullets (indented '  - ' lines become '\u25e6' sub-points), with a blank line before each list.
   var BUL_RE = /^(\s*)[-\u2022\u25e6]\s+(.*)$/;
   function tidyBullets(text) { var out = []; String(text || '').split('\n').forEach(function (l) { var m = l.match(BUL_RE); if (m) { var prev = out.length ? out[out.length - 1] : ''; if (prev.trim() && !BUL_RE.test(prev)) out.push(''); out.push(m[1].length >= 2 ? '    \u25e6 ' + m[2] : '\u2022 ' + m[2]); } else out.push(l); }); return out.join('\n'); }
-  function linkPlain(text) { return String(text || '').replace(MD_LINK, '$1 ($2)'); }
+  // Tables (Nov 2026, recruitment plan): lines written '| cell | cell |', first line the header; '; ' inside a cell is a line break.
+  // Emails and the Copy button get a real table; WhatsApp, Outlook links and Vincere logs get one readable line per row.
+  var TBL_RE = /^\s*\|.*\|\s*$/;
+  function tblCells(l) { return l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); }
+  function tblPlain(text) { var head = null; return String(text || '').split('\n').map(function (l) { if (!TBL_RE.test(l)) { head = null; return l; } var c = tblCells(l); if (!head) { head = c; return null; } return '- ' + c[0].split('; ').join(', ') + ' (' + c.slice(1, c.length - 2).join(', ') + '): ' + (c[c.length - 2] === c[c.length - 1] ? c[c.length - 1] : c[c.length - 2] + ' to ' + c[c.length - 1]); }).filter(function (l) { return l !== null; }).join('\n'); }
+  function linkPlain(text) { return tblPlain(String(text || '')).replace(MD_LINK, '$1 ($2)'); }
   function mailHtml(text) {
     var e = function (x) { return String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
     var out = [], list = [], lines = String(text || '').replace(/\r/g, '').split('\n');
     var UL = '<ul style="margin-top:0;margin-bottom:0;' + MAIL_STYLE + '">', LI = '<li style="' + MAIL_STYLE + '">';
     var flush = function () { if (!list.length) return; var h = UL, sub = false; list.forEach(function (it, i) { if (it.l === 0 || i === 0) { if (sub) { h += '</ul>'; sub = false; } if (i > 0) h += '</li>'; h += LI + lk(it.t); } else { if (!sub) { h += UL; sub = true; } h += LI + lk(it.t) + '</li>'; } }); if (sub) h += '</ul>'; out.push(h + '</li></ul>'); list = []; };
     var lk = function (x) { return e(x).replace(MD_LINK, '<a href="$2" style="color:rgb(5,99,193);text-decoration:underline">$1</a>'); };
-    lines.forEach(function (l) { var m = l.match(BUL_RE); if (m) { list.push({ l: m[1].length >= 2 ? 1 : 0, t: m[2] }); return; } flush(); out.push('<div style="' + MAIL_STYLE + '">' + (l.trim() ? lk(l) : '<br>') + '</div>'); });
-    flush();
+    var tbl = [], tflush = function () { if (!tbl.length) return; var TD = 'border:1px solid #bfbfbf;padding:4px 8px;vertical-align:top;' + MAIL_STYLE;
+      out.push('<table style="border-collapse:collapse;margin:4px 0">' + tbl.map(function (cells, i) { return '<tr>' + cells.map(function (c) { return (i ? '<td style="' + TD + '">' : '<th style="' + TD + ';font-weight:bold;text-align:left;background:#f2f2f2">') + c.split('; ').map(lk).join('<br>') + (i ? '</td>' : '</th>'); }).join('') + '</tr>'; }).join('') + '</table>'); tbl = []; };
+    lines.forEach(function (l) { if (TBL_RE.test(l)) { flush(); tbl.push(tblCells(l)); return; } tflush(); var m = l.match(BUL_RE); if (m) { list.push({ l: m[1].length >= 2 ? 1 : 0, t: m[2] }); return; } flush(); out.push('<div style="' + MAIL_STYLE + '">' + (l.trim() ? lk(l) : '<br>') + '</div>'); });
+    flush(); tflush();
     return out.join('');
   }
   function num(v) { var n = Number(String(v || '').replace(/[^\d.]/g, '')); return isFinite(n) ? n : 0; }
@@ -35,7 +42,20 @@
   // Enquiry responses (English or Bahasa Indonesia): thanks, the service(s), then an invitation to an initial online discussion (booking link if saved).
   function enqInv(v) { var id = v.lang === 'id'; return '\n\n' + (id ? 'Sebagai langkah awal, saya ingin mengatur diskusi online agar saya dapat memperkenalkan diri, menjelaskan layanan kami, dan bersama-sama melihat layanan mana yang paling sesuai untuk Anda. ' + (v.book ? 'Silakan gunakan [tautan ini](' + v.book + ') untuk memilih waktu yang sesuai.' : 'Mohon informasikan hari dan waktu yang sesuai untuk Anda.') : 'I think a good first step will be to arrange an initial online discussion so I can introduce myself, take you through our services and explore which will be best for you. ' + (v.book ? 'Please use [this link](' + v.book + ') to choose a time that suits you.' : 'Please let me know a day and time that suits you.')) + '\n'; }
   function enqT(id, n, subj, text, subjId, textId) { return { id: id, g: 'Enquiry responses', e: 'contact', n: n, ch: 'email', vars: ['sal', 'name', 'lang', 'book'], subj: function (v) { return v.lang === 'id' ? subjId : subj; }, body: function (v) { var L = v.lang === 'id'; return (L ? 'Halo ' : 'Hello ') + v.sal + ' ' + v.name + ',\n\n' + (L ? textId : text) + enqInv(v); } }; }
+  // Recruitment plan (from Text Blaze /RP, Nov 2026): stage timeline from the plan start date (calendar days, as /RP did).
+  var RP_ROWS = [['Send search profile; Send recruitment plan', 'Kirim profil pencarian; Kirim rencana rekrutmen', 'S', 1, 1], ['Confirm search profile is correct; Confirm agreement with recruitment plan', 'Konfirmasi profil pencarian sudah benar; Konfirmasi persetujuan rencana rekrutmen', 'C', 2, 2], ['Advertise on web & social media; Build company target list', 'Iklan di web & media sosial; Menyusun daftar perusahaan target', 'S', 3, 3], ['Network outreach; Referral outreach; Headhunt candidates', 'Menghubungi jaringan; Meminta referensi; Headhunting kandidat', 'S', 3, 10], ['Qualify candidates; Interview candidates; Management review of candidates', 'Kualifikasi kandidat; Wawancara kandidat; Tinjauan manajemen atas kandidat', 'S', 4, 14], ['Present candidates', 'Presentasi kandidat', 'S', 14, 20], ['Provide CV feedback', 'Memberikan masukan atas CV', 'C', 15, 21], ['1st Interview', 'Wawancara ke-1', 'CK', 20, 27], ['2nd Interview', 'Wawancara ke-2', 'CK', 28, 35], ['Other interview', 'Wawancara lainnya', 'CK', 36, 43], ['Selection Decision', 'Keputusan seleksi', 'C', 44, 47], ['Issue Offer', 'Penerbitan penawaran kerja', 'C', 48, 50], ['Acceptance', 'Penerimaan penawaran', 'K', 51, 52], ['Resignation', 'Pengunduran diri', 'K', 53, 55], ['Start Date', 'Tanggal mulai bekerja', 'K', 84, 84]];
+  function rpDay(v, n) { var p = String(v.rpdate || '').split('-'), d = p.length === 3 ? new Date(+p[0], p[1] - 1, +p[2]) : new Date(); d.setDate(d.getDate() + n); return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear(); }
+  function rpBody(v) {
+    var L = v.lang === 'id', co = v.company || (L ? '[nama perusahaan]' : '[company name]'), who = { S: 'Select Headhunter', C: co, CK: co + (L ? ' / Kandidat' : ' / Candidate'), K: L ? 'Kandidat' : 'Candidate' };
+    var tbl = (L ? '| Tahap | Pihak yang bertanggung jawab | Tanggal mulai | Tanggal selesai |' : '| Stage | Responsible Party | Start Date | Completion Date |') + '\n' + RP_ROWS.map(function (r) { return '| ' + (L ? r[1] : r[0]) + ' | ' + who[r[2]] + ' | ' + rpDay(v, r[3]) + ' | ' + rpDay(v, r[4]) + ' |'; }).join('\n');
+    var hi = (L ? 'Halo ' : 'Hello ') + (v.sal ? v.sal + ' ' : '') + v.name + ',\n\n';
+    return L ? hi + 'Terima kasih atas kesempatan untuk mendukung ' + co + ' dalam merekrut anggota tim yang baru. Berikut uraian yang jelas mengenai setiap tahap dalam proses rekrutmen, beserta perkiraan tanggal mulai dan tanggal selesai masing-masing tahap. Kami akan memulai proses hari ini (' + rpDay(v, 0) + ') dan mengikuti jadwal terstruktur selama 55 hari kerja, dengan perkiraan tanggal mulai bekerja ' + rpDay(v, 84) + ', dengan asumsi kandidat memiliki masa pemberitahuan (notice period) satu bulan.\n\n' + tbl +
+      '\n\nJika perkiraan tanggal mulai bekerja terlalu lama\n\nJika perkiraan tanggal mulai ini belum sesuai dengan kebutuhan bisnis Anda, kami dapat mempersingkat jadwal dengan menyesuaikan beberapa bagian dari proses rekrutmen. Pilihan yang umum antara lain:\n- Menggabungkan beberapa tahap wawancara menjadi satu wawancara panel. Ini biasanya mempersingkat siklus wawancara sebanyak 5–10 hari kerja.\n- Menetapkan jadwal wawancara yang tetap. Misalnya, menyediakan dua hari tertentu setiap minggu untuk wawancara agar penjadwalan lebih cepat.\n- Mengurangi jumlah tahap wawancara. Jika memungkinkan, menggabungkan wawancara ke-1 dan ke-2 menjadi satu sesi yang lebih panjang.\n- Menyepakati waktu keputusan sejak awal. Menyepakati periode keputusan 24–48 jam setelah wawancara akhir dapat sangat mengurangi keterlambatan.\n\nSaya dengan senang hati akan menyesuaikan jadwal berdasarkan penyesuaian yang Anda inginkan. Mohon kabari saya jika Anda ingin mempercepat proses atau menyelaraskan tanggal-tanggal ini dengan tenggat waktu internal. Saya siap memperbarui rencana ini segera.'
+      : hi + 'Thank you for the opportunity to support ' + co + ' in the recruitment of a new team member. Below is a clear outline of each stage involved in the recruitment process, with the estimated start and completion date for each. We will start the process today (' + rpDay(v, 0) + ') and will follow a structured timeline of 55 working days, with an estimated start date of ' + rpDay(v, 84) + ', assuming the candidate has a one month notice period.\n\n' + tbl +
+      '\n\nIf the Estimated Start Date Is Too Long\n\nIf this projected start date does not meet your business needs, we can shorten the timeline by adjusting a few parts of the hiring process. Common options include:\n- Combining interview stages into a single panel interview. This typically reduces the interview cycle by 5–10 working days.\n- Setting fixed interview windows. For example, allocating two specific days each week for interviews ensures faster scheduling.\n- Reducing the number of interview rounds. If appropriate, merging the 1st and 2nd interviews into one extended session.\n- Pre-aligned decision windows. Agreeing on a 24–48 hour decision period after final interviews significantly reduces delays.\n\nI\u2019m happy to revise the timeline based on any adjustments you prefer. Please let me know if you would like to accelerate the process or align the dates with internal deadlines. I\u2019m ready to update the plan immediately.';
+  }
   var TPLS = [
+    { id: 'rp', g: 'Recruitment plan', e: 'contact', n: 'Recruitment plan (timeline table)', ch: 'email', vars: ['sal', 'name', 'lang', 'rpdate'], subj: function (v) { return (v.lang === 'id' ? 'Rencana rekrutmen' : 'Recruitment plan') + (v.company ? ' \u2013 ' + v.company : ''); }, body: rpBody },
     { id: 'opp', g: 'Job opportunities', e: 'candidate', n: 'New job opportunity (written from the job)', ch: 'both', vars: ['sal', 'name', 'lang', 'opp'],
       subj: function (v) { var o = oppCur(v.lang); return o && o.subject ? o.subject : (v.lang === 'id' ? 'Peluang karier yang bersifat rahasia' : 'Confidential career opportunity'); },
       body: function (v) { var hi = (v.lang === 'id' ? 'Halo ' : 'Hello ') + (v.sal ? v.sal + ' ' : '') + v.name + ',', o = oppCur(v.lang);
@@ -137,6 +157,7 @@
     if (t.vars.indexOf('sal') >= 0) h += '<div><label>Salutation</label><select data-v="sal"><option>Pak</option><option>Bu</option><option>Mas</option><option>Mbak</option></select></div>';
     if (t.vars.indexOf('name') >= 0) h += '<div><label>First name</label><input data-v="name"></div>';
     if (t.vars.indexOf('lang') >= 0) h += '<div><label>Language</label><select data-v="lang"><option value="en">English</option><option value="id">Bahasa Indonesia</option></select></div>';
+    if (t.vars.indexOf('rpdate') >= 0) h += '<div><label>Plan starts on</label><input type="date" data-v="rpdate"></div><div><label>Client company</label><input data-v="company" placeholder="Company name"></div>';
     if (t.vars.indexOf('date') >= 0) h += '<div><label>Interview date</label><input data-v="date" placeholder="Monday 3 November 2026"></div>';
     if (t.vars.indexOf('time') >= 0) h += '<div><label>Time</label><input data-v="time" placeholder="10:00 WIB"></div>';
     h += '</div>';
@@ -146,16 +167,16 @@
       h += '<div class="two"><div><label>Service</label><select data-v="service"><option>Exclusive</option><option>Non-Exclusive</option></select></div><div class="two"><div><label>Fixed %</label><input data-v="fixed_pct"></div><div><label>Variable %</label><input data-v="var_pct"></div></div></div>' +
         '<table class="fee"><tr><th>Compensation</th><th>Monthly (Rp)</th><th>Months</th></tr>' + FEE_ROWS.map(function (r) { return '<tr><td>' + r[1] + '</td><td><input data-v="' + r[0] + '_amt" inputmode="numeric"></td><td><select data-v="' + r[0] + '_m">' + r[2].map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></td></tr>'; }).join('') + '</table>';
     }
-    h += '<label>Message</label><textarea id="body"></textarea><div class="note">The reply keeps the email’s own subject. Your Outlook signature is added by Outlook.</div>' +
+    h += '<label>Message</label><textarea id="body"></textarea><div id="pvBox" hidden><label>How the email will look</label><div class="note">The lines starting with | above are the table; edit them there.</div><div id="pv" style="background:#fff;border:1px solid #dde3ea;border-radius:6px;padding:8px;max-height:320px;overflow:auto;font-size:12px"></div></div><div class="note">The reply keeps the email’s own subject. Your Outlook signature is added by Outlook.</div>' +
       '<label class="chk"><input type="checkbox" id="log" checked> Log this reply on the person’s Vincere record</label>' +
       '<div class="btns"><button class="btn" type="button" id="rp">Reply in Outlook</button><button class="btn q" type="button" id="ra">Reply all</button><button class="btn q" type="button" id="cp">Copy</button></div><div class="st" id="st"></div>';
-    ed.innerHTML = h; $('#back').onclick = drawList;
+    ed.innerHTML = h; $('#back').onclick = drawList; $('#body').addEventListener('input', pv);
     [].forEach.call(ed.querySelectorAll('[data-v]'), function (i) {
       var k = i.dataset.v;
-      if (k === 'sal') i.value = v.sal; else if (k === 'name') i.value = v.name; else if (k === 'book') i.value = v.book; else if (k === 'fixed_pct') i.value = t.id === 'exs' ? '18' : '20'; else if (k === 'var_pct') i.value = '10'; else if (/_m$/.test(k)) i.value = /^f/.test(k) ? '13' : (k === 'cm_m' ? '12' : '1');
+      if (k === 'rpdate') { var td = new Date(); i.value = td.getFullYear() + '-' + ('0' + (td.getMonth() + 1)).slice(-2) + '-' + ('0' + td.getDate()).slice(-2); } else if (k === 'company') i.value = LS.get('co.' + String(FROM.email || '').split('@')[1]) || ''; else if (k === 'sal') i.value = v.sal; else if (k === 'name') i.value = v.name; else if (k === 'book') i.value = v.book; else if (k === 'fixed_pct') i.value = t.id === 'exs' ? '18' : '20'; else if (k === 'var_pct') i.value = '10'; else if (/_m$/.test(k)) i.value = /^f/.test(k) ? '13' : (k === 'cm_m' ? '12' : '1');
       TV[k] = i.value;
       i.addEventListener('input', function () {
-        TV[k] = i.value; if (k === 'book') LS.set('booklink', i.value.trim());
+        TV[k] = i.value; if (k === 'book') LS.set('booklink', i.value.trim()); if (k === 'company' && FROM.email) LS.set('co.' + String(FROM.email).split('@')[1], i.value.trim());
         if (k === 'service') { var fp = ed.querySelector('[data-v=fixed_pct]'); fp.value = CUR.id === 'exs' ? (i.value === 'Exclusive' ? '18' : '20') : (i.value === 'Exclusive' ? '20' : '22.5'); TV.fixed_pct = fp.value; }
         fill();
       });
@@ -237,10 +258,13 @@
         .catch(function (e) { $('#mySave').disabled = false; msg(e.message, 'err'); });
     };
   }
-  function fill() { $('#body').value = tidyBullets(CUR.body(vars())); }
+  function pv() { var b = $('#body'), box = $('#pvBox'); if (!b || !box) return; var has = b.value.split('\n').some(function (l) { return TBL_RE.test(l); }); box.hidden = !has; if (has) $('#pv').innerHTML = mailHtml(b.value); }
+  function fill() { $('#body').value = tidyBullets(CUR.body(vars())); pv(); }
   function msg(t, c) { var s = $('#st'); s.className = 'st' + (c ? ' ' + c : ''); s.textContent = t; }
   function html(text) { return mailHtml(text) + '<div style="' + MAIL_STYLE + '"><br></div>'; } // blank line before Outlook adds the signature
-  function copy() { var b = linkPlain($('#body').value); try { navigator.clipboard.writeText(b).then(function () { msg('Copied.', 'ok'); }, function () { msg('Select the text and press Ctrl+C.', 'err'); }); } catch (e) { msg('Select the text and press Ctrl+C.', 'err'); } }
+  function copy() { var raw = $('#body').value, b = linkPlain(raw);
+    if (window.ClipboardItem && raw.split('\n').some(function (l) { return TBL_RE.test(l); })) { navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([mailHtml(raw)], { type: 'text/html' }), 'text/plain': new Blob([b], { type: 'text/plain' }) })]).then(function () { msg('Copied with the table.', 'ok'); }, function () { msg('Select the text and press Ctrl+C.', 'err'); }); return; }
+    try { navigator.clipboard.writeText(b).then(function () { msg('Copied.', 'ok'); }, function () { msg('Select the text and press Ctrl+C.', 'err'); }); } catch (e) { msg('Select the text and press Ctrl+C.', 'err'); } }
   function reply(all) {
     if (!ITEM) { msg('Open an email first.', 'err'); return; }
     var body = $('#body').value, h = html(body);
